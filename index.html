@@ -1,16 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Setu Viewer</title>
-    <!-- Vue 3 -->
-    <script src="https://unpkg.com/vue@3.5.1/dist/vue.global.js"></script>
+    <!-- jQuery -->
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- TypeScript -->
-    <script src="https://unpkg.com/typescript@5.3.3/lib/typescript.js"></script>
     <!-- Axios for HTTP requests -->
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
 </head>
@@ -24,30 +21,52 @@
                 <p class="text-gray-600">Explore Pixiv Artworks</p>
             </header>
 
+            <!-- Proxy Status Banner -->
+            <div id="proxyStatusBanner" class="mb-4 hidden">
+                <div class="bg-blue-100 border-l-4 border-blue-500 text-blue-700 p-4 rounded">
+                    <div class="flex flex-col">
+                        <div class="flex items-center mb-2">
+                            <div class="flex-shrink-0">
+                                <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd"
+                                        d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
+                                        clip-rule="evenodd" />
+                                </svg>
+                            </div>
+                            <div class="ml-3">
+                                <p class="text-sm" id="proxyStatusCount"></p>
+                            </div>
+                        </div>
+                        <div class="text-xs space-y-1" id="proxyStatusList"></div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Main Content -->
             <div class="max-w-4xl mx-auto bg-white rounded-lg shadow-lg overflow-hidden">
                 <div class="md:flex">
                     <!-- Image Section -->
                     <div class="md:flex-1 p-4">
                         <div class="relative aspect-square bg-gray-100 rounded-lg overflow-hidden">
-                            <img :src="currentImage" @error="handleImageError" class="w-full h-full object-contain"
-                                :class="{'animate-pulse': loading}" />
-                            <div v-if="loading" class="absolute inset-0 flex items-center justify-center">
-                                <div
-                                    class="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin">
+                            <img id="artworkImage" src="./images/loading.svg" class="w-full h-full object-contain" />
+
+                            <!-- Loading Indicator -->
+                            <div id="loadingIndicator" class="hidden absolute inset-0 flex flex-col items-center justify-center bg-gray-100/80">
+                                <div class="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4">
                                 </div>
+                                <p class="text-sm text-gray-600">Loading image...</p>
+                                <p id="loadingProgress" class="text-xs text-gray-500 mt-2"></p>
                             </div>
-                            <!-- 添加错误提示 -->
-                            <div v-if="currentImage === './images/error.svg'"
-                                class="absolute inset-0 flex flex-col items-center justify-center bg-gray-100">
-                                <svg class="w-16 h-16 text-gray-400" fill="none" stroke="currentColor"
-                                    viewBox="0 0 24 24">
+
+                            <!-- Error State -->
+                            <div id="errorState" class="hidden absolute inset-0 flex flex-col items-center justify-center bg-gray-100/95 p-4">
+                                <svg class="w-16 h-16 text-red-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                         d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                                 </svg>
-                                <p class="mt-4 text-gray-600">Image failed to load</p>
-                                <button @click="getRandomImage"
-                                    class="mt-4 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">
+                                <p id="errorMessage" class="text-gray-600 text-center mb-2"></p>
+                                <div id="retryCount" class="text-sm text-gray-500 mb-4"></div>
+                                <button id="retryButton" class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors">
                                     Try Another Image
                                 </button>
                             </div>
@@ -59,31 +78,21 @@
                         <div class="space-y-4">
                             <div>
                                 <h2 class="text-sm font-semibold text-gray-500">PID</h2>
-                                <a :href="'https://www.pixiv.net/artworks/' + artworkData.pid"
-                                    class="text-blue-600 hover:text-blue-800 hover:underline" target="_blank">
-                                    {{ artworkData.pid || 'Loading...' }}
+                                <a id="artworkPid" href="#" class="text-blue-600 hover:text-blue-800 hover:underline" target="_blank">
+                                    Loading...
                                 </a>
                             </div>
                             <div>
                                 <h2 class="text-sm font-semibold text-gray-500">Title</h2>
-                                <p class="text-gray-800">
-                                    {{ artworkData.title || 'Loading...' }}
-                                </p>
+                                <p id="artworkTitle" class="text-gray-800">Loading...</p>
                             </div>
                             <div>
                                 <h2 class="text-sm font-semibold text-gray-500">Author</h2>
-                                <p class="text-gray-800">
-                                    {{ artworkData.author || 'Loading...' }}
-                                </p>
+                                <p id="artworkAuthor" class="text-gray-800">Loading...</p>
                             </div>
                             <div>
                                 <h2 class="text-sm font-semibold text-gray-500">Tags</h2>
-                                <div class="flex flex-wrap gap-2 mt-1">
-                                    <span v-for="tag in parsedTags" :key="tag"
-                                        class="inline-block px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full">
-                                        {{ tag }}
-                                    </span>
-                                </div>
+                                <div id="artworkTags" class="flex flex-wrap gap-2 mt-1"></div>
                             </div>
                         </div>
                     </div>
@@ -92,189 +101,22 @@
 
             <!-- Action Button -->
             <div class="text-center mt-8">
-                <button @click="getRandomImage"
-                    class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200 disabled:opacity-50"
-                    :disabled="loading">
+                <button id="nextImageBtn" class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200">
                     Next Image
                 </button>
             </div>
         </div>
     </div>
 
-    <script lang="ts">
-        // TypeScript interface definitions
-        interface ArtworkData {
-            pid: string;
-            title: string;
-            author: string;
-            tags: string;
-            url: string;
-        }
+    <!-- Add error and loading images fallback -->
+    <div style="display: none">
+        <img src="./images/loading.svg" alt="Loading placeholder"
+            onerror="this.onerror=null;this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIxMCIgc3Ryb2tlPSIjQ0NDQ0NDIiBzdHJva2Utd2lkdGg9IjQiLz48L3N2Zz4='">
+        <img src="./images/error.svg" alt="Error placeholder"
+            onerror="this.onerror=null;this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cGF0aCBkPSJNMTIgOXYyTTEyIDE1aC4wMU0zLjA2MiAxN2gxMy44NzZjMS41NCAwIDIuNTAyLTEuNjY3IDEuNzMyLTNMMTMuNzMyIDRjLS43Ny0xLjMzMy0yLjY5NC0xLjMzMy0zLjQ2NCAwTDMuMzQgMTRjLS43NyAxLjMzMy4xOTIgMyAxLjczMiAzeiIgc3Ryb2tlPSIjRUY0NDQ0IiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvc3ZnPg=='">
+    </div>
 
-        // Vue app
-        const { createApp, ref, computed } = Vue;
-
-        createApp({
-            setup() {
-                const indexData = ref <string[]> ([]);
-                const artworkData = ref <ArtworkData> ({
-                    pid: '',
-                    title: '',
-                    author: '',
-                    tags: '',
-                    url: ''
-                });
-                const loading = ref(true);
-                const currentImage = ref('./images/loading.svg');
-
-                const retryCount = ref(0);
-                const maxRetries = 3;
-
-                        // 添加错误状态管理
-                const errorState = ref<{
-                    hasError: boolean;
-                    message: string;
-                    retryCount: number;
-                }>({
-                    hasError: false,
-                    message: '',
-                    retryCount: 0
-                });
-
-
-                const reverseProxyPrefixs = [
-                    "https://pixiv.ciallo.link",
-                    "https://pixiv.mayx.eu.org",
-                    "https://i.yuki.sh",
-                ]
-
-                const randomReverseProxyPrefix = reverseProxyPrefixs[Math.floor(Math.random() * reverseProxyPrefixs.length)];
-
-                const parsedTags = computed(() => {
-                    return artworkData.value.tags ? artworkData.value.tags.split(',').map(tag => tag.trim()) : [];
-                });
-
-
-                // 添加缓存机制
-                const imageCache = new Map <string, string>();
-
-                async function tryLoadImage(url: string): Promise<string> {
-                    // 添加超时处理
-                    const timeout = (ms: number) => new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error('Timeout')), ms)
-                    );
-
-                    // 检查缓存
-                    if (imageCache.has(url)) {
-                        return imageCache.get(url)!;
-                    }
-
-                    for (const prefix of reverseProxyPrefixs) {
-                        try {
-                            const imageUrl = `${prefix}${url}`;
-                                        // 添加 5 秒超时
-                            const response = await Promise.race([
-                                fetch(imageUrl, { method: 'HEAD' }),
-                                timeout(5000)
-                            ]);
-                            
-                            if (response.ok) {
-                                // 存入缓存
-                                imageCache.set(url, imageUrl);
-                                return imageUrl;
-                            }
-                        } catch (error) {
-                            console.warn(`Failed to load image from ${prefix}:`, error);
-                        }
-                    }
-                    throw new Error('All image proxies failed');
-                }
-
-                // 清理过期缓存
-                setInterval(() => {
-                    if (imageCache.size > 100) { // 限制缓存大小
-                        imageCache.clear();
-                    }
-                }, 1000 * 60 * 30); // 每30分钟检查一次
-
-                async function fetchIndexData() {
-                    try {
-                        const response = await axios.get('./index.json');
-                        indexData.value = response.data;
-
-                        await getRandomImage();
-                    } catch (error) {
-                        console.error('Error fetching index data:', error);
-                    }
-                }
-
-                async function getRandomImage() {
-                    if (!indexData.value.length || loading.value) return;
-
-                    
-                    loading.value = true;
-                    errorState.value.hasError = false;
-                    currentImage.value = './images/loading.svg';
-
-                    try {
-                    
-                        const randomIndex = Math.floor(Math.random() * indexData.value.length);
-                        const response = await axios.get(`./data/${indexData.value[randomIndex]}`);
-                        artworkData.value = response.data;
-
-
-                        // 尝试加载图片
-                        try {
-
-                            const workingUrl = await tryLoadImage(response.data.url);
-                            currentImage.value = workingUrl;
-                            loading.value = false;
-                            errorState.value.retryCount = 0;
-
-                            
-                        } catch (error) {
-                            console.error('Failed to load image from all proxies:', error);
-                            handleImageError();
-                            
-                        }
-                    } catch (error) {
-                        console.error('Error fetching image data:', error);
-                        errorState.value.message = 'Failed to fetch image data';
-                        errorState.value.hasError = true;
-                        handleImageError();
-                    }
-                }
-
-
-                function handleImageError() {
-                    if (errorState.value.retryCount < maxRetries) {
-                        errorState.value.retryCount++;
-                        console.log(`Retrying image load (${errorState.value.retryCount}/${maxRetries})...`);
-                        getRandomImage();
-                    } else {
-                        errorState.value.retryCount = 0;
-                        loading.value = false;
-                        currentImage.value = './images/error.svg';
-                        errorState.value.hasError = true;
-                        errorState.value.message = 'Failed to load image after multiple retries';
-                    }
-                }
-
-                // Initialize
-                fetchIndexData();
-
-                return {
-                    artworkData,
-                    loading,
-                    currentImage,
-                    parsedTags,
-                    getRandomImage,
-                    handleImageError,
-                    errorState
-                };
-            }
-        }).mount('#app');
-    </script>
+    <!-- Include our JavaScript -->
+    <script src="js/app.js"></script>
 </body>
-
 </html>
