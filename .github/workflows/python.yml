@@ -61,7 +61,7 @@ jobs:
         
     - name: Upload logs as artifact
       if: always()  # Run even if the script fails
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4 # 更新到 v4 版本
       with:
         name: execution-logs
         path: logs/
