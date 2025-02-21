@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pixiv Artwork Viewer</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap">
+  
+  <style>
+    * {
+      font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    .apple-blur {
+      backdrop-filter: blur(20px) saturate(180%);
+      -webkit-backdrop-filter: blur(20px) saturate(180%);
+    }
+
+    .image-container {
+      transition: transform 0.3s ease-out;
+    }
+
+    .image-container:hover {
+      transform: scale(1.02);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #0A84FF 0%, #0066FF 100%);
+      transition: all 0.3s ease;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 15px rgba(10, 132, 255, 0.3);
+    }
+
+    .proxy-pill {
+      transition: all 0.2s ease;
+    }
+
+    .proxy-pill:hover:not(:disabled) {
+      transform: translateY(-1px);
+    }
+
+    @keyframes shimmer {
+      0% { background-position: -1000px 0; }
+      100% { background-position: 1000px 0; }
+    }
+
+    .loading-shimmer {
+      background: linear-gradient(90deg, 
+        rgba(255,255,255,0.03) 0%, 
+        rgba(255,255,255,0.08) 50%, 
+        rgba(255,255,255,0.03) 100%);
+      background-size: 1000px 100%;
+      animation: shimmer 2s infinite;
+    }
+
+    .tag-cloud {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      transition: all 0.3s ease;
+    }
+
+    .artwork-tag {
+      background: rgba(10, 132, 255, 0.1);
+      border: 1px solid rgba(10, 132, 255, 0.2);
+      transition: all 0.2s ease;
+    }
+
+    .artwork-tag:hover {
+      background: rgba(10, 132, 255, 0.2);
+      transform: translateY(-1px);
+    }
+  </style>
+</head>
+<body class="bg-gradient-to-br from-slate-900 to-slate-800 text-white min-h-screen">
+  <div id="root"></div>
+  
+  <script type="text/babel" data-type="module">
+    // Constants and configuration
+    const MAX_RETRIES = 3;
+    const INDEX_CACHE_TTL = 60 * 60 * 1000; // Cache index.json for 1 hour
+    const CACHE_CLEANUP_INTERVAL = 30 * 60 * 1000;
+    const MAX_CACHE_SIZE = 100;
+    const PROXY_CHECK_INTERVAL = 5 * 60 * 1000; // Check proxies every 5 minutes
+
+    // List of proxies (reverse addresses)
+    const PROXY_PREFIXES = [
+      "https://pixiv.ciallo.link",
+      "https://pixiv.mayx.eu.org",
+      "https://i.yuki.sh",
+    ];
+
+    // Cache keys for localStorage
+    const CACHE_KEYS = {
+      INDEX: 'pixiv-viewer-index',
+      PROXY_STATUS: 'pixiv-viewer-proxy-status',
+      IMAGE_CACHE: 'pixiv-viewer-image-cache',
+      LAST_PROXY_CHECK: 'pixiv-viewer-last-proxy-check'
+    };
+
+    const ImageStatus = {
+      IDLE: 'idle',
+      LOADING: 'loading',
+      SUCCESS: 'success',
+      ERROR: 'error'
+    };
+
+    // Utility for localStorage caching with TTL check
+    const CacheUtils = {
+      get: (key, ttl = INDEX_CACHE_TTL) => {
+        try {
+          const item = localStorage.getItem(key);
+          if (!item) return null;
+          const { value, timestamp } = JSON.parse(item);
+          if (Date.now() - timestamp > ttl) {
+            localStorage.removeItem(key);
+            return null;
+          }
+          return value;
+        } catch {
+          return null;
+        }
+      },
+      set: (key, value) => {
+        try {
+          const item = {
+            value,
+            timestamp: Date.now()
+          };
+          localStorage.setItem(key, JSON.stringify(item));
+        } catch {
+          // Ignore errors for localStorage write
+        }
+      }
+    };
+
+    // Common utility function for loading images with timeout
+    const loadImageWithTimeout = (url, timeout = 5000) => {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        const timeoutId = setTimeout(() => {
+          img.src = '';
+          reject(new Error('Image load timeout'));
+        }, timeout);
+
+        img.onload = () => {
+          clearTimeout(timeoutId);
+          resolve(url);
+        };
+
+        img.onerror = () => {
+          clearTimeout(timeoutId);
+          reject(new Error('Image load failed'));
+        };
+
+        img.src = url;
+      });
+    };
+
+    // Main App Component
+    function App() {
+      const [artwork, setArtwork] = React.useState(null);
+      const [status, setStatus] = React.useState(ImageStatus.IDLE);
+      const [error, setError] = React.useState(null);
+      const [retryCount, setRetryCount] = React.useState(0);
+      const [proxyStatus, setProxyStatus] = React.useState(() => {
+        return CacheUtils.get(CACHE_KEYS.PROXY_STATUS, 0) ||
+          PROXY_PREFIXES.map(prefix => ({ prefix, status: true }));
+      });
+      const [currentProxy, setCurrentProxy] = React.useState(null);
+      const [artworkIndex, setArtworkIndex] = React.useState(() => {
+        return CacheUtils.get(CACHE_KEYS.INDEX, INDEX_CACHE_TTL) || null;
+      });
+
+      const imageCache = React.useRef(new Map(
+        Object.entries(CacheUtils.get(CACHE_KEYS.IMAGE_CACHE, INDEX_CACHE_TTL) || {})
+      ));
+
+      // Track component mount status
+      const isMounted = React.useRef(false);
+
+      // Check proxy status
+      const checkProxyStatus = React.useCallback(async (force = false) => {
+        const lastCheck = CacheUtils.get(CACHE_KEYS.LAST_PROXY_CHECK, PROXY_CHECK_INTERVAL);
+        if (!force && lastCheck && Date.now() - lastCheck < PROXY_CHECK_INTERVAL) {
+          return proxyStatus.filter(p => p.status).map(p => p.prefix);
+        }
+
+        let testImagePath = '/img-master/img/2012/07/31/21/30/57/29019010_p0_master1200.jpg';
+        if (artworkIndex?.length > 0) {
+          try {
+            const testFile = artworkIndex[0];
+            const artworkResponse = await axios.get(`./data/${testFile}`);
+            if (artworkResponse.data.url) {
+              testImagePath = artworkResponse.data.url;
+            }
+          } catch {
+            // Fallback to default testImagePath
+          }
+        }
+
+        const results = await Promise.all(
+          PROXY_PREFIXES.map(async (prefix) => {
+            try {
+              const testUrl = `${prefix}${testImagePath.startsWith('/') ? testImagePath : '/' + testImagePath}`;
+              await loadImageWithTimeout(testUrl, 3000);
+              return { prefix, status: true };
+            } catch {
+              return { prefix, status: false };
+            }
+          })
+        );
+
+        if (isMounted.current) {
+          setProxyStatus(results);
+          CacheUtils.set(CACHE_KEYS.PROXY_STATUS, results);
+          CacheUtils.set(CACHE_KEYS.LAST_PROXY_CHECK, Date.now());
+        }
+
+        const availableProxies = results.filter(r => r.status);
+        if (availableProxies.length === 0) {
+          throw new Error('No working proxy servers available');
+        }
+        return availableProxies.map(r => r.prefix);
+      }, [artworkIndex]);
+
+      // Try loading image with proxy
+      const tryLoadImage = React.useCallback(async (url) => {
+        if (!url) throw new Error('Invalid image URL');
+        const normalizedUrl = url.startsWith('/') ? url : `/${url}`;
+
+        const cachedUrl = imageCache.current.get(normalizedUrl);
+        if (cachedUrl) {
+          try {
+            await loadImageWithTimeout(cachedUrl, 3000);
+            return cachedUrl;
+          } catch {
+            imageCache.current.delete(normalizedUrl);
+          }
+        }
+
+        const availableProxies = await checkProxyStatus();
+        let proxyToTry = (currentProxy && availableProxies.includes(currentProxy))
+          ? currentProxy
+          : availableProxies[0];
+        const proxiesToTry = [proxyToTry, ...availableProxies.filter(p => p !== proxyToTry)];
+
+        for (const prefix of proxiesToTry) {
+          try {
+            const imageUrl = `${prefix}${normalizedUrl}`;
+            await loadImageWithTimeout(imageUrl, 5000);
+            imageCache.current.set(normalizedUrl, imageUrl);
+            CacheUtils.set(CACHE_KEYS.IMAGE_CACHE, Object.fromEntries(imageCache.current.entries()));
+            if (isMounted.current) {
+              setCurrentProxy(prefix);
+            }
+            return imageUrl;
+          } catch {
+            continue;
+          }
+        }
+        throw new Error('Failed to load image from any proxy');
+      }, [currentProxy, checkProxyStatus]);
+
+      // Fetch random artwork
+      const fetchRandomArtwork = React.useCallback(async () => {
+        if (status === ImageStatus.LOADING) return;
+
+        try {
+          setStatus(ImageStatus.LOADING);
+          setError(null);
+
+          let files = artworkIndex;
+          if (!files) {
+            const response = await axios.get('./index.json');
+            files = response.data;
+            if (Array.isArray(files) && files.length > 0 && isMounted.current) {
+              setArtworkIndex(files);
+              CacheUtils.set(CACHE_KEYS.INDEX, files);
+            }
+          }
+
+          if (!Array.isArray(files) || files.length === 0) {
+            throw new Error('Invalid or empty index data');
+          }
+
+          const randomFile = files[Math.floor(Math.random() * files.length)];
+          const artworkResponse = await axios.get(`./data/${randomFile}`);
+          const artworkData = artworkResponse.data;
+
+          if (!artworkData.url) {
+            throw new Error('No valid image URL found');
+          }
+
+          const workingUrl = await tryLoadImage(artworkData.url);
+          if (isMounted.current) {
+            setArtwork({ ...artworkData, displayUrl: workingUrl });
+            setStatus(ImageStatus.SUCCESS);
+            setRetryCount(0);
+          }
+        } catch (err) {
+          console.error('Error fetching artwork:', err);
+          if (isMounted.current) {
+            if (retryCount < MAX_RETRIES) {
+              setRetryCount(prev => prev + 1);
+              setTimeout(fetchRandomArtwork, 1000);
+            } else {
+              setError(err.message);
+              setStatus(ImageStatus.ERROR);
+            }
+          }
+        }
+      }, [artworkIndex, status, retryCount, tryLoadImage]);
+
+      // Handle proxy selection
+      const handleProxyChange = React.useCallback((proxy) => {
+        if (proxyStatus.find(p => p.prefix === proxy && p.status)) {
+          setCurrentProxy(proxy);
+          if (artwork?.url) {
+            tryLoadImage(artwork.url).then(newUrl => {
+              if (isMounted.current) {
+                setArtwork(prev => ({...prev, displayUrl: newUrl}));
+              }
+            });
+          }
+        }
+      }, [proxyStatus, artwork, tryLoadImage]);
+
+      // Initialize component
+      React.useEffect(() => {
+        isMounted.current = true;
+
+        const init = async () => {
+          try {
+            if (!artworkIndex) {
+              const response = await axios.get('./index.json');
+              if (Array.isArray(response.data) && response.data.length > 0 && isMounted.current) {
+                setArtworkIndex(response.data);
+                CacheUtils.set(CACHE_KEYS.INDEX, response.data);
+              }
+            }
+            await checkProxyStatus(true);
+            await fetchRandomArtwork();
+          } catch (err) {
+            if (isMounted.current) {
+              setError('Failed to initialize application');
+              setStatus(ImageStatus.ERROR);
+            }
+          }
+        };
+
+        init();
+
+        const cleanup = setInterval(() => {
+          if (imageCache.current.size > MAX_CACHE_SIZE) {
+            imageCache.current.clear();
+            CacheUtils.set(CACHE_KEYS.IMAGE_CACHE, {});
+          }
+        }, CACHE_CLEANUP_INTERVAL);
+
+        const proxyCheck = setInterval(() => {
+          checkProxyStatus(true).catch(() => {});
+        }, PROXY_CHECK_INTERVAL);
+
+        return () => {
+          isMounted.current = false;
+          clearInterval(cleanup);
+          clearInterval(proxyCheck);
+        };
+      }, []);
+
+      return (
+        <div className="container mx-auto px-4 py-8 max-w-7xl">
+          <header className="text-center mb-12">
+            <h1 className="text-5xl font-bold mb-3 bg-clip-text text-transparent bg-gradient-to-r from-[#0A84FF] to-[#6C47FF]">
+              Pixiv Gallery
+            </h1>
+            <p className="text-lg text-gray-400 font-light">Curated Artwork Collection</p>
+          </header>
+
+          <div className="mb-8 apple-blur bg-white/5 rounded-2xl p-6 border border-white/10">
+            <div className="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
+              <p className="text-sm text-[#0A84FF] font-medium">
+                Active Proxy: <span className="font-semibold">{currentProxy?.replace('https://', '') || 'Auto-select'}</span>
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {proxyStatus.map((proxy, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => handleProxyChange(proxy.prefix)}
+                    className={`
+                      proxy-pill px-4 py-2 text-sm rounded-full
+                      ${proxy.prefix === currentProxy 
+                        ? 'bg-[#0A84FF] text-white' 
+                        : 'bg-white/5 text-[#0A84FF] border border-[#0A84FF]/30'
+                      }
+                      ${!proxy.status && 'opacity-40 cursor-not-allowed'}
+                    `}
+                    disabled={!proxy.status}
+                  >
+                    {proxy.prefix.replace('https://', '')}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="apple-blur bg-white/5 rounded-2xl overflow-hidden border border-white/10 shadow-2xl">
+            <div className="md:flex">
+              <div className="md:flex-1 p-6">
+                <div className="relative aspect-square bg-black/20 rounded-2xl overflow-hidden image-container">
+                  {status === ImageStatus.LOADING && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-10">
+                      <div className="w-16 h-16 rounded-full border-3 border-[#0A84FF] border-t-transparent animate-spin" />
+                    </div>
+                  )}
+                  
+                  {status === ImageStatus.ERROR && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 z-10">
+                      <div className="rounded-full bg-red-500/10 p-4 mb-4">
+                        <svg className="w-12 h-12 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" 
+                                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                      </div>
+                      <p className="text-red-400 mb-6 text-lg">{error}</p>
+                      <button
+                        onClick={fetchRandomArtwork}
+                        className="btn-primary px-6 py-3 rounded-full text-white"
+                      >
+                        Try Again
+                      </button>
+                    </div>
+                  )}
+
+                  {artwork?.displayUrl && (
+                    <img
+                      src={artwork.displayUrl}
+                      alt={artwork.title}
+                      className="w-full h-full object-contain"
+                      onError={() => setStatus(ImageStatus.ERROR)}
+                    />
+                  )}
+                </div>
+              </div>
+
+              <div className="md:w-96 p-8 bg-white/5 border-l border-white/10">
+                <div className="space-y-6">
+                  {artwork && (
+                    <>
+                      <div>
+                        <h2 className="text-sm font-medium text-gray-400 mb-2">Artwork ID</h2>
+                        <a
+                          href={`https://www.pixiv.net/artworks/${artwork.pid}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[#0A84FF] hover:text-[#0A84FF]/80 text-lg font-medium"
+                        >
+                          {artwork.pid}
+                        </a>
+                      </div>
+                      <div>
+                        <h2 className="text-sm font-medium text-gray-400 mb-2">Title</h2>
+                        <p className="text-white text-lg font-medium">{artwork.title}</p>
+                      </div>
+                      <div>
+                        <h2 className="text-sm font-medium text-gray-400 mb-2">Artist</h2>
+                        <p className="text-white text-lg font-medium">{artwork.author}</p>
+                      </div>
+                      <div>
+                        <h2 className="text-sm font-medium text-gray-400 mb-3">Tags</h2>
+                        <div className="tag-cloud">
+                          {artwork.tags.map((tag, idx) => (
+                            <span
+                              key={idx}
+                              className="artwork-tag px-3 py-1.5 text-sm text-[#0A84FF] rounded-full"
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="text-center mt-12">
+            <button
+              onClick={fetchRandomArtwork}
+              disabled={status === ImageStatus.LOADING}
+              className="btn-primary px-8 py-4 rounded-full text-white text-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Next Artwork
+            </button>
+          </div>
+
+          <footer className="text-center mt-12 space-y-2">
+            <p className="text-sm text-gray-500">Logged in as {window.currentUser || 'anonymous'}</p>
+            <p className="text-sm text-gray-500">Updated: {new Date('2025-02-21 13:13:53').toLocaleString()}</p>
+          </footer>
+        </div>
+      );
+    }
+
+    // Render the application
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
