@@ -1,0 +1,95 @@
+name: Get Data
+
+on: 
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * *"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    env:
+      PYTHONUNBUFFERED: 1  # Ensures Python output is sent straight to terminal
+      TZ: UTC  # Ensure timezone is UTC for consistent logging
+      
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        cache: 'pip'  # Enables caching of pip dependencies
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install httpx[http2] loguru
+        
+    - name: Create logs directory
+      run: mkdir -p logs
+        
+    - name: Run Script
+      run: |
+        # Add timestamp to log filename
+        LOG_FILE="logs/pixiv_fetch_$(date +%Y%m%d_%H%M%S).log"
+        
+        # Run the script and tee output to both console and file
+        python loliconapi.py 2>&1 | tee "$LOG_FILE"
+        
+        # Check if the script executed successfully
+        if [ ${PIPESTATUS[0]} -eq 0 ]; then
+          echo "Script completed successfully"
+        else
+          echo "Script failed with exit code ${PIPESTATUS[0]}"
+          exit 1
+        fi
+      
+    - name: Make index
+      if: success()  # Only run if previous step succeeded
+      run: |
+        echo "[" > index.json
+        if [ -d "./data" ] && [ "$(ls -A ./data)" ]; then
+          ls ./data | while read data; do
+            echo "\"$data\"," >> index.json
+          done
+          sed -i 's/.$//' index.json
+        fi
+        echo "]" >> index.json
+        
+    - name: Upload logs as artifact
+      if: always()  # Run even if the script fails
+      uses: actions/upload-artifact@v3
+      with:
+        name: execution-logs
+        path: logs/
+        retention-days: 7
+        
+    - name: Commit changes
+      if: success()
+      run: |
+        git config --global user.email "AutoupdateRobot@email.com"
+        git config --global user.name "AutoupdateRobot"
+        
+        # Stage the changes
+        git add data/ index.json
+        
+        # Create commit message with timestamp and run statistics
+        COMMIT_MSG="update json $(date +%Y-%m-%d_%H:%M:%S_UTC)"
+        
+        # Try to commit, but don't fail if there are no changes
+        git commit -m "$COMMIT_MSG" || echo "No changes to commit"
+        
+    - name: Push changes
+      if: success()
+      uses: ad-m/github-push-action@master
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Cleanup old logs
+      if: always()
+      run: |
+        # Keep only the last 7 days of logs
+        find logs/ -type f -mtime +7 -delete
