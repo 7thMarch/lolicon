@@ -199,7 +199,7 @@
 
                 async function fetchIndexData() {
                     try {
-                        const response = await axios.get('/lolicon/index.json');
+                        const response = await axios.get('./index.json');
                         indexData.value = response.data;
 
                         await getRandomImage();
@@ -219,7 +219,7 @@
                     try {
                     
                         const randomIndex = Math.floor(Math.random() * indexData.value.length);
-                        const response = await axios.get(`/lolicon/data/${indexData.value[randomIndex]}`);
+                        const response = await axios.get(`./data/${indexData.value[randomIndex]}`);
                         artworkData.value = response.data;
 
 
