@@ -136,6 +136,7 @@
                     try {
                         const response = await axios.get('/lolicon/index.json');
                         indexData.value = response.data;
+                                      console.log("Index data fetched: ", JSON.stringify(indexData.value, null, 2));
                         await getRandomImage();
                     } catch (error) {
                         console.error('Error fetching index data:', error);
@@ -152,6 +153,7 @@
                         const randomIndex = Math.floor(Math.random() * indexData.value.length);
                         const response = await axios.get(`/lolicon/data/${indexData.value[randomIndex]}`);
                         artworkData.value = response.data;
+                        console.log("Artwork data fetched: ", JSON.stringify(artworkData.value.url, null, 2));
                         currentImage.value = `${randomReverseProxyPrefix}${response.data.url}`;
                     } catch (error) {
                         console.error('Error fetching image data:', error);
