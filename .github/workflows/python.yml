@@ -58,14 +58,32 @@ jobs:
     - name: Make index
       if: success()  # Only run if previous step succeeded
       run: |
-        echo "[" > index.json
+        # 初始化 index.json 文件
+        printf "[" > index.json
+
+        # 检查 data 目录是否存在且不为空
         if [ -d "./data" ] && [ "$(ls -A ./data)" ]; then
-          ls ./data | while read data; do
-            echo "\"$data\"," >> index.json
+          # 获取所有文件并按字典序排序
+          files=$(ls ./data | sort)
+          
+          # 初始化一个标志来追踪是否是第一个文件
+          first=true
+          
+          # 遍历所有文件
+          for file in $files; do
+            if [ "$first" = true ]; then
+              # 第一个文件不需要前导逗号
+              printf "\"%s\"" "$file" >> index.json
+              first=false
+            else
+              # 其他文件需要前导逗号
+              printf ",\"%s\"" "$file" >> index.json
+            fi
           done
-          sed -i 's/.$//' index.json
         fi
-        echo "]" >> index.json
+
+        # 关闭 JSON 数组
+        printf "]" >> index.json
 
     - name: Upload logs as artifact
       if: always()  # Run even if the script fails
